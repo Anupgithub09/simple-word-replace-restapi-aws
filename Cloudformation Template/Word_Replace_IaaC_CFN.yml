@@ -1,0 +1,153 @@
+Resources:
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      ManagedPolicyArns: 
+      - arn:aws:iam::aws:policy/AWSLambdaExecute
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+  WordReplaceFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: LambdaExecutionRole
+    Properties:
+      FunctionName: "word_replace_lambda_function"
+      Description: "Lambda function which the Rest API invokes to replace matching words in string"
+      Role: !GetAtt 'LambdaExecutionRole.Arn'
+      Runtime: python3.9
+      Handler: index.lambda_handler
+      Code:
+        ZipFile: |
+          import json
+          def lambda_handler(event, context):
+            try:
+             input_string=event['string']
+             output_string="There is no word to replace in the input string"
+
+             #Define list of words which need replacement
+             replace_word_list=['Oracle','Google','Microsoft','Amazon','Deloitte']
+
+             #Identify matching words in the input string for the replacing word list
+             for word in replace_word_list:
+                 if word in input_string:
+                    #Apppend copyright character to replace the words
+                    word_replacement=word+u"\u00A9"
+                    input_string=input_string.replace(word, word_replacement)
+                    output_string=input_string
+                    print(output_string)
+            except KeyError:
+             output_string="API error : Please ensure input string is provided in json format with the correct key"
+            except:
+             output_string="API error : Please check the backend Lambda function logs"
+            return output_string
+  WordReplaceAPIAuthorizer:
+    Type: AWS::Lambda::Function
+    DependsOn: LambdaExecutionRole
+    Properties:
+      FunctionName: "word_replace_api_authorizer"
+      Description: "Lambda function which the Rest API invokes to authorize token for API execution"
+      Role: !GetAtt 'LambdaExecutionRole.Arn'
+      Runtime: python3.9
+      Handler: index.lambda_handler
+      Code:
+        ZipFile: |
+          import json
+          def lambda_handler(event, context):
+            auth="Deny" 
+
+            #Check the authorization token of the incomig request
+            if event['authorizationToken'] == 'deloitteuser2022':
+              auth="Allow"
+            else:
+              auth="Deny"
+
+            #Define the poicy document to be returned by the function 
+            authResponse = { "principalId": "deloitteuser", "policyDocument": { "Version": "2012-10-17", "Statement": [{"Action": "execute-api:Invoke", "Resource": [event['methodArn']], "Effect": auth}] }}
+            return authResponse
+  ApiGateway:
+     Type: AWS::ApiGateway::RestApi
+     Properties:
+      Description: API Gateway resource
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+      Name: word_replace_api
+  
+  ApiGatewayAuthorizer:
+    Type: AWS::ApiGateway::Authorizer
+    Properties: 
+      AuthorizerUri: !Join 
+        - ''
+        - - 'arn:aws:apigateway:'
+          - !Ref 'AWS::Region'
+          - ':lambda:path/2015-03-31/functions/'
+          - !GetAtt 
+            - WordReplaceAPIAuthorizer
+            - Arn
+          - /invocations
+      IdentitySource: method.request.header.authorizationToken
+      AuthorizerResultTtlInSeconds: 0
+      Name: word_replace_api_authorizer
+      RestApiId: !Ref ApiGateway
+      Type: TOKEN
+  
+  ApiGatewayRequestValidator:
+    Type: AWS::ApiGateway::RequestValidator
+    Properties: 
+      Name: 'Validate Body'
+      RestApiId: !Ref ApiGateway
+      ValidateRequestBody: true
+      ValidateRequestParameters: false
+
+  ApiGatewayDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - ApiGatewayMethod
+    Properties:
+      RestApiId: !Ref ApiGateway
+      StageName: dev
+
+  ApiGatewayMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      ApiKeyRequired: false
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref ApiGatewayAuthorizer
+      RequestValidatorId : !Ref ApiGatewayRequestValidator
+      RequestParameters: 
+        method.request.header.authorizationToken: true
+      RequestModels: 
+        application/json: Error
+      HttpMethod: POST
+      Integration:
+        ConnectionType: INTERNET
+        IntegrationHttpMethod: POST
+        PassthroughBehavior: WHEN_NO_MATCH
+        TimeoutInMillis: 29000
+        Type: AWS
+        Uri: !Sub 
+          - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaArn}/invocations'
+          - lambdaArn: !GetAtt WordReplaceFunction.Arn
+        IntegrationResponses:
+          - StatusCode: 200
+      MethodResponses:
+          - StatusCode: 200
+            ResponseModels: { "application/json": "Empty" }
+      ResourceId: !GetAtt ApiGateway.RootResourceId
+      RestApiId: !Ref ApiGateway
+
+  LambdaApiGatewayInvoke:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt WordReplaceFunction.Arn
+      Principal: apigateway.amazonaws.com
+      # note: if route *not* at API Gateway root, `SourceArn` would take the form of:
+      #               arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${apiGateway}/${apiGatewayStageName}/${apiGatewayHTTPMethod}/PATH_PART
+      SourceArn: !Join ["", ["arn:aws:execute-api:", {"Ref": "AWS::Region"}, ":", {"Ref": "AWS::AccountId"}, ":", !Ref ApiGateway, "/*/*/*"]]
