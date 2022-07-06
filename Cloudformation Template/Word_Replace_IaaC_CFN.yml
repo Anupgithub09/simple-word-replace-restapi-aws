@@ -82,15 +82,9 @@ Resources:
   ApiGatewayAuthorizer:
     Type: AWS::ApiGateway::Authorizer
     Properties: 
-      AuthorizerUri: !Join 
-        - ''
-        - - 'arn:aws:apigateway:'
-          - !Ref 'AWS::Region'
-          - ':lambda:path/2015-03-31/functions/'
-          - !GetAtt 
-            - WordReplaceAPIAuthorizer
-            - Arn
-          - /invocations
+      AuthorizerUri: !Sub
+        - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaArn}/invocations'
+        - lambdaArn: !GetAtt WordReplaceAPIAuthorizer.Arn
       IdentitySource: method.request.header.authorizationToken
       AuthorizerResultTtlInSeconds: 0
       Name: word_replace_api_authorizer
@@ -151,3 +145,13 @@ Resources:
       # note: if route *not* at API Gateway root, `SourceArn` would take the form of:
       #               arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${apiGateway}/${apiGatewayStageName}/${apiGatewayHTTPMethod}/PATH_PART
       SourceArn: !Join ["", ["arn:aws:execute-api:", {"Ref": "AWS::Region"}, ":", {"Ref": "AWS::AccountId"}, ":", !Ref ApiGateway, "/*/*/*"]]
+  
+  LambdaApiGatewayAuthorizerInvoke:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt WordReplaceAPIAuthorizer.Arn
+      Principal: apigateway.amazonaws.com
+      # note: if route *not* at API Gateway root, `SourceArn` would take the form of:
+      #               arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${apiGateway}/${apiGatewayStageName}/${apiGatewayHTTPMethod}/PATH_PART
+      SourceArn: !Join ["", ["arn:aws:execute-api:", {"Ref": "AWS::Region"}, ":", {"Ref": "AWS::AccountId"}, ":", !Ref ApiGateway, "/authorizers/", !Ref ApiGatewayAuthorizer]]
